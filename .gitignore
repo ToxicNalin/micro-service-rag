@@ -1,0 +1,8 @@
+.env
+.venv*/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+evaluation/results/
+*.pem
+.DS_Store

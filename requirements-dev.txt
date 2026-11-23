@@ -1,0 +1,20 @@
+# Common base (every service)
+fastapi==0.163.1
+uvicorn[standard]==0.54.0
+pydantic-settings==2.16.3
+pyjwt[crypto]==2.15.1
+httpx==0.28.1
+
+# Needed by common/ (embeddings, vectorstore)
+qdrant-client==1.20.0
+fastembed==0.9.1
+
+# Dev and test tools
+pytest==9.2.0
+pytest-asyncio==1.5.0
+fakeredis==2.40.0
+aiosqlite==0.22.1
+ruff==0.17.5
+
+# Service requirements are added here by later steps:
+# -r services/<name>/requirements.txt
