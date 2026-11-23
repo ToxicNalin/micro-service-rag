@@ -2218,9 +2218,9 @@ Claude ticks a box when a step's tests pass; you confirm it with the "Done when"
 
 - [x] 0.1 Repository skeleton and Claude rules
 - [x] 0.2 Environment file and infrastructure containers
-- [ ] 1.1 Settings and logging
-- [ ] 1.2 Security (JWT verification, roles, internal token)
-- [ ] 1.3 Embeddings and vector store
+- [x] 1.1 Settings and logging
+- [x] 1.2 Security (JWT verification, roles, internal token)
+- [x] 1.3 Embeddings and vector store
 - [ ] 2.1 Auth skeleton, database models and migrations
 - [ ] 2.2 Passwords, signing keys, JWKS and token creation
 - [ ] 2.3 Register, login, refresh, logout, me, change password
@@ -2273,3 +2273,10 @@ Design decisions made in this spec. Claude appends new rows when a step forces a
 | 2026-11-19 | spec | Removed the retrieval ablation study | Requested; RAGAS context precision and recall now measure retrieval quality. |
 | 2026-11-19 | spec | Ingestion jobs run in FastAPI `BackgroundTasks` with a semaphore | Simple, and enough for one machine. A queue (Arq, Celery) is a possible extension. |
 | 2026-11-23 | 0.1 | `tests/unit/` and `tests/integration/` hold a `.gitkeep` (no `__init__.py`) | Git doesn't track empty folders; no `__init__.py` keeps pytest's default import mode simple. |
+| 2026-11-24 | 1.1 | `RequestIdMiddleware` reuses an incoming `X-Request-ID` only if it matches `^[A-Za-z0-9._-]{1,128}$` (else generates one), and logs the path without the query string | Stops log/header injection through a client-supplied ID; query strings can carry secrets. |
+| 2026-11-24 | 1.1 | `JsonFormatter` redacts `extra` fields whose key contains authorization/password/secret/token/cookie/api_key (recursively) | Enforces I8 at the formatter, so a careless `extra={...}` can't leak a secret. |
+| 2026-11-24 | 1.2 | `Principal.token` is `field(repr=False)`; `JWTVerifier` exposes a read-only `jwks_client` property | Logging a Principal never prints the token; the gateway lifespan (5.1) can warm the JWKS cache through it. |
+| 2026-11-24 | 1.3 | `tenant_filter(doc_ids=[])` (an explicit empty list) matches nothing; `None` means no document filter | Safer default: an empty selection must never widen to "all documents". |
+| 2026-11-24 | 1.3 | Other modules call `vectorstore.client()` / embedding helpers through the module, never `from ... import client` | Lets `qdrant_mem` / `fake_embeddings` patch them in tests. |
+| 2026-11-24 | 1.3 | The autouse `test_env` fixture replaces the real model loaders with a function that raises; `fake_embeddings` overrides it | Guarantees tests never download models (one early test run did, before this guard). |
+| 2026-11-24 | 1.3 | ruff: FastAPI markers (`Depends`, `Header`, …) are `extend-immutable-calls` for B008; `S105`/`S106` ignored under `tests/**` | Standard FastAPI idiom and intentional fake secrets in tests; no rule is weakened for service code. |
