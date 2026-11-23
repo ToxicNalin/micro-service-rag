@@ -193,3 +193,21 @@ def test_request_id_resets_after_request() -> None:
         client.get("/rid", headers={"X-Request-ID": "temp"})
         assert client.get("/boom").status_code == 500
     assert get_request_id() == "-"
+
+
+# ---------- production secret check ----------
+
+def test_production_check_ignores_development() -> None:
+    from common.settings import check_production_secrets
+
+    s = BaseServiceSettings(internal_api_token="change-me-to-a-long-random-string")
+    check_production_secrets(s)  # development: allowed
+
+
+def test_production_check_rejects_placeholders(monkeypatch: pytest.MonkeyPatch) -> None:
+    from common.settings import check_production_secrets
+
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    with pytest.raises(RuntimeError, match="internal_api_token"):
+        check_production_secrets(BaseServiceSettings(internal_api_token="change-me-x"))
+    check_production_secrets(BaseServiceSettings(internal_api_token="a-real-random-value"))

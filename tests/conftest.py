@@ -6,6 +6,7 @@ import uuid
 import zlib
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import jwt
@@ -49,6 +50,12 @@ def test_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     yield
     set_verifier(None)
     clear_settings_caches()
+
+
+@pytest.fixture
+def sqlite_url(tmp_path: Path) -> str:
+    """Async SQLite URL in a per-test temp folder (DB tests run without Postgres)."""
+    return f"sqlite+aiosqlite:///{(tmp_path / 'test.db').as_posix()}"
 
 
 # ---------- JWT (Step 1.2) ----------

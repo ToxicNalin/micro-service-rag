@@ -166,6 +166,7 @@ def require_roles(*roles: Role) -> Callable[..., Awaitable[Principal]]:
     allowed = frozenset(roles)
 
     async def dependency(principal: Principal = Depends(get_principal)) -> Principal:
+        """Return the caller if their role is allowed, else raise 403."""
         if principal.role not in allowed:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role")
         return principal

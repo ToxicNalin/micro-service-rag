@@ -26,6 +26,7 @@ _STANDARD_ATTRS = set(vars(logging.LogRecord("x", logging.INFO, "x", 0, "x", Non
     "message",
     "asctime",
     "taskName",
+    "color_message",  # uvicorn's ANSI-coloured duplicate of msg
 }
 # Extra fields whose values must never reach the logs (I8).
 _SENSITIVE_KEY = re.compile(r"authorization|password|passwd|secret|token|cookie|api_key|apikey", re.I)
@@ -120,12 +121,15 @@ class RequestIdMiddleware:
                 incoming = value.decode("latin-1")
                 break
         request_id = incoming if _SAFE_REQUEST_ID.match(incoming) else uuid.uuid4().hex
+        # also on request.state, for exception handlers that run outside this middleware
+        scope.setdefault("state", {})["request_id"] = request_id
 
         ctx_token = request_id_var.set(request_id)
         start = time.perf_counter()
         started = False
 
         def log_request(status: int) -> None:
+            """Log one access line for this request."""
             _log.info(
                 "%s %s %s",
                 scope.get("method", "-"),
@@ -140,6 +144,7 @@ class RequestIdMiddleware:
             )
 
         async def send_wrapper(message: Message) -> None:
+            """Add X-Request-ID to the response start and log it."""
             nonlocal started
             if message["type"] == "http.response.start":
                 started = True

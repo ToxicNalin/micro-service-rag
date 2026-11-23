@@ -1,5 +1,6 @@
 """Typed settings shared by all services, loaded from environment variables."""
 
+import re
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -41,6 +42,22 @@ def get_base_settings() -> BaseServiceSettings:
 def get_vector_settings() -> VectorSettings:
     """Return the cached vector settings used by common.embeddings and common.vectorstore."""
     return VectorSettings()
+
+
+_SECRET_FIELD = re.compile(r"token|password|secret|api_key|database_url", re.I)
+
+
+def check_production_secrets(settings: BaseSettings) -> None:
+    """Refuse to start in production while any secret setting still holds a `change-me` placeholder."""
+    if getattr(settings, "environment", "development").lower() != "production":
+        return
+    bad = sorted(
+        name
+        for name, value in settings.model_dump().items()
+        if _SECRET_FIELD.search(name) and isinstance(value, str) and "change-me" in value
+    )
+    if bad:
+        raise RuntimeError(f"refusing to start in production with placeholder secrets: {', '.join(bad)}")
 
 
 def clear_settings_caches() -> None:

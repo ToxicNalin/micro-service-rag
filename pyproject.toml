@@ -20,5 +20,8 @@ extend-immutable-calls = [
     "fastapi.File", "fastapi.Form", "fastapi.Cookie", "fastapi.Security",
 ]
 
+[tool.ruff.lint.isort]
+known-first-party = ["common", "auth_service", "ingestion_service", "retrieval_service", "gateway_service"]
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S105", "S106"]   # fake secrets in tests are intentional

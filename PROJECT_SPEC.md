@@ -2221,7 +2221,7 @@ Claude ticks a box when a step's tests pass; you confirm it with the "Done when"
 - [x] 1.1 Settings and logging
 - [x] 1.2 Security (JWT verification, roles, internal token)
 - [x] 1.3 Embeddings and vector store
-- [ ] 2.1 Auth skeleton, database models and migrations
+- [x] 2.1 Auth skeleton, database models and migrations
 - [ ] 2.2 Passwords, signing keys, JWKS and token creation
 - [ ] 2.3 Register, login, refresh, logout, me, change password
 - [ ] 2.4 User management and the last-admin rule
@@ -2280,3 +2280,8 @@ Design decisions made in this spec. Claude appends new rows when a step forces a
 | 2026-11-24 | 1.3 | Other modules call `vectorstore.client()` / embedding helpers through the module, never `from ... import client` | Lets `qdrant_mem` / `fake_embeddings` patch them in tests. |
 | 2026-11-24 | 1.3 | The autouse `test_env` fixture replaces the real model loaders with a function that raises; `fake_embeddings` overrides it | Guarantees tests never download models (one early test run did, before this guard). |
 | 2026-11-24 | 1.3 | ruff: FastAPI markers (`Depends`, `Header`, …) are `extend-immutable-calls` for B008; `S105`/`S106` ignored under `tests/**` | Standard FastAPI idiom and intentional fake secrets in tests; no rule is weakened for service code. |
+| 2026-11-24 | 2.1 | Added `common.settings.check_production_secrets(settings)`, called first in each service lifespan | One implementation of the §6 startup rule (refuse `change-me` secrets in production) for all four services. |
+| 2026-11-24 | 2.1 | `RequestIdMiddleware` also stores the ID on `request.state.request_id`; the generic 500 handler reads it and sets `X-Request-ID` | Starlette runs `Exception` handlers outside all middleware, where the context variable is already reset. |
+| 2026-11-24 | 2.1 | `create_app()` configures logging from `SERVICE_NAME`/`LOG_LEVEL` via `os.getenv`, not the validated settings | `app = create_app()` runs at import; required settings (e.g. `DATABASE_URL`) must not be validated then. |
+| 2026-11-24 | 2.1 | `alembic.ini`: `prepend_sys_path = . ../..` with `path_separator = space`; `env.py` also accepts `config.attributes["database_url"]` | Migrations run both in the image (`/srv`) and locally from `services/auth`; tests run them on SQLite. |
+| 2026-11-24 | 2.1 | `UserRole(enum.StrEnum)` instead of `(str, Enum)`; `RefreshToken.user` relationship (`lazy="joined"`) added | Same behaviour (ruff UP042); `rotate_refresh_token` (2.3) reads `row.user`. |
