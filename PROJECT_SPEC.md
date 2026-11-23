@@ -2217,7 +2217,7 @@ If sound only plays in one ear, check that the balance setting in the app is cen
 Claude ticks a box when a step's tests pass; you confirm it with the "Done when" checks.
 
 - [x] 0.1 Repository skeleton and Claude rules
-- [ ] 0.2 Environment file and infrastructure containers
+- [x] 0.2 Environment file and infrastructure containers
 - [ ] 1.1 Settings and logging
 - [ ] 1.2 Security (JWT verification, roles, internal token)
 - [ ] 1.3 Embeddings and vector store

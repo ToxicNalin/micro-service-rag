@@ -1,0 +1,43 @@
+name: docmind
+
+x-health: &health
+  interval: 10s
+  timeout: 5s
+  retries: 30
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD}
+      INGESTION_DB_PASSWORD: ${INGESTION_DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports: ["127.0.0.1:5432:5432"]
+    healthcheck: { <<: *health, test: ["CMD-SHELL", "pg_isready -U postgres"] }
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redis_data:/data]
+    ports: ["127.0.0.1:6379:6379"]
+    healthcheck: { <<: *health, test: ["CMD", "redis-cli", "ping"] }
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.20.0
+    volumes: [qdrant_data:/qdrant/storage]
+    ports: ["127.0.0.1:6333:6333"]     # dashboard: http://localhost:6333/dashboard
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  qdrant_data:
+  models:
+  jwt_keys:
