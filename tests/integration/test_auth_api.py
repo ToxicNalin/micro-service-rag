@@ -53,6 +53,7 @@ def auth_client(auth_env: str) -> Iterator[TestClient]:
 
 # ---------- health ----------
 
+
 def test_health(auth_client: TestClient) -> None:
     resp = auth_client.get("/health")
     assert resp.status_code == 200
@@ -96,6 +97,7 @@ def test_production_refuses_placeholder_secrets(monkeypatch: pytest.MonkeyPatch,
 
 # ---------- schema (portable models on SQLite) ----------
 
+
 def test_models_apply_defaults(auth_env: str) -> None:
     engine = sa.create_engine(_sync_url(auth_env))
     with sa.orm.Session(engine) as s:
@@ -107,7 +109,9 @@ def test_models_apply_defaults(auth_env: str) -> None:
         s.flush()
         s.add(
             RefreshToken(
-                user_id=user.id, family_id=uuid.uuid4(), token_hash="0" * 64,
+                user_id=user.id,
+                family_id=uuid.uuid4(),
+                token_hash="0" * 64,
                 expires_at=sa.func.now(),
             )
         )
@@ -127,16 +131,19 @@ def test_email_and_slug_are_unique(auth_env: str) -> None:
         t = Tenant(name="A", slug="a")
         s.add(t)
         s.flush()
-        s.add_all([
-            User(tenant_id=t.id, email="dup@x.io", full_name="1", password_hash="h"),
-            User(tenant_id=t.id, email="dup@x.io", full_name="2", password_hash="h"),
-        ])
+        s.add_all(
+            [
+                User(tenant_id=t.id, email="dup@x.io", full_name="1", password_hash="h"),
+                User(tenant_id=t.id, email="dup@x.io", full_name="2", password_hash="h"),
+            ]
+        )
         with pytest.raises(sa.exc.IntegrityError):
             s.commit()
     engine.dispose()
 
 
 # ---------- migrations ----------
+
 
 def _alembic_config(url: str) -> Config:
     cfg = Config(str(AUTH_DIR / "alembic.ini"))
@@ -169,6 +176,7 @@ def test_migration_matches_models(monkeypatch: pytest.MonkeyPatch, sqlite_url: s
 
 
 # ---------- Step 2.2: JWKS endpoint ----------
+
 
 def test_jwks_endpoint(auth_client: TestClient) -> None:
     resp = auth_client.get("/.well-known/jwks.json")
@@ -254,8 +262,12 @@ def test_register_rejects_extra_fields(auth_client: TestClient) -> None:
     resp = auth_client.post(
         "/auth/register",
         json={
-            "tenant_name": "Acme", "full_name": "A", "email": "a@acme.io", "password": PASSWORD,
-            "tenant_id": str(uuid.uuid4()), "role": "admin",
+            "tenant_name": "Acme",
+            "full_name": "A",
+            "email": "a@acme.io",
+            "password": PASSWORD,
+            "tenant_id": str(uuid.uuid4()),
+            "role": "admin",
         },
     )
     assert resp.status_code == 422
@@ -428,3 +440,183 @@ def test_login_stores_client_metadata(auth_client: TestClient, auth_env: str) ->
         rows = conn.execute(sa.select(RefreshToken.user_agent, RefreshToken.ip_address)).all()
     engine.dispose()
     assert ("pytest-agent", "203.0.113.9") in rows
+
+
+# ---------- Step 2.4: user management and the last-admin rule ----------
+
+MEMBER_PASSWORD = "member-pass-123"
+
+
+def _auth(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _admin(client: TestClient, email: str = "alice@acme.io", tenant: str = "Acme Corp") -> dict:
+    """Register a tenant; return its admin's tokens plus user and tenant IDs."""
+    body = _register(client, email=email, tenant=tenant)
+    me = _me(client, body["access_token"]).json()
+    return {**body, "user_id": me["user"]["id"], "tenant_id": me["tenant"]["id"]}
+
+
+def _create_user(
+    client: TestClient, admin_token: str, email: str = "bob@acme.io", role: str = "member"
+) -> httpx.Response:
+    return client.post(
+        "/users",
+        json={"email": email, "full_name": "Bob Member", "password": MEMBER_PASSWORD, "role": role},
+        headers=_auth(admin_token),
+    )
+
+
+def test_admin_creates_and_lists_members(auth_client: TestClient) -> None:
+    admin = _admin(auth_client)
+    resp = _create_user(auth_client, admin["access_token"], email="Bob@Acme.io")
+    assert resp.status_code == 201, resp.text
+    bob = resp.json()
+    assert bob["role"] == "member" and bob["email"] == "bob@acme.io" and bob["is_active"] is True
+    assert "password" not in resp.text
+
+    users = auth_client.get("/users", headers=_auth(admin["access_token"])).json()
+    assert [u["email"] for u in users] == ["alice@acme.io", "bob@acme.io"]
+
+    login = _login(auth_client, email="bob@acme.io", password=MEMBER_PASSWORD)
+    assert login.status_code == 200
+    me = _me(auth_client, login.json()["access_token"]).json()
+    assert me["user"]["role"] == "member" and me["tenant"]["id"] == admin["tenant_id"]
+
+
+def test_create_user_validation(auth_client: TestClient) -> None:
+    token = _admin(auth_client)["access_token"]
+    assert _create_user(auth_client, token, email="alice@acme.io").status_code == 409  # duplicate
+    weak = auth_client.post(
+        "/users", json={"email": "c@acme.io", "full_name": "C", "password": "weak"}, headers=_auth(token)
+    )
+    assert weak.status_code == 400
+    smuggled = auth_client.post(
+        "/users",
+        json={
+            "email": "d@acme.io",
+            "full_name": "D",
+            "password": MEMBER_PASSWORD,
+            "tenant_id": str(uuid.uuid4()),
+        },
+        headers=_auth(token),
+    )
+    assert smuggled.status_code == 422
+
+
+def test_member_cannot_manage_users(auth_client: TestClient) -> None:
+    admin = _admin(auth_client)
+    bob = _create_user(auth_client, admin["access_token"]).json()
+    member_token = _login(auth_client, email="bob@acme.io", password=MEMBER_PASSWORD).json()["access_token"]
+    h = _auth(member_token)
+    assert auth_client.get("/users", headers=h).status_code == 403
+    assert _create_user(auth_client, member_token, email="x@acme.io").status_code == 403
+    assert (
+        auth_client.patch(f"/users/{admin['user_id']}", json={"role": "member"}, headers=h).status_code == 403
+    )
+    assert auth_client.delete(f"/users/{bob['id']}", headers=h).status_code == 403
+
+
+def test_users_routes_require_token(auth_client: TestClient) -> None:
+    assert auth_client.get("/users").status_code == 401
+
+
+def test_other_tenants_users_are_404(auth_client: TestClient) -> None:
+    a = _admin(auth_client, email="a@a.io", tenant="Tenant A")
+    b = _admin(auth_client, email="b@b.io", tenant="Tenant B")
+    b_member = _create_user(auth_client, b["access_token"], email="m@b.io").json()
+
+    ha = _auth(a["access_token"])
+    for target in (b["user_id"], b_member["id"]):
+        assert (
+            auth_client.patch(f"/users/{target}", json={"full_name": "pwned"}, headers=ha).status_code == 404
+        )
+        assert auth_client.delete(f"/users/{target}", headers=ha).status_code == 404
+    assert auth_client.patch(f"/users/{uuid.uuid4()}", json={"full_name": "x"}, headers=ha).status_code == 404
+
+    a_list = auth_client.get("/users", headers=ha).json()
+    assert [u["email"] for u in a_list] == ["a@a.io"]
+    b_list = auth_client.get("/users", headers=_auth(b["access_token"])).json()
+    assert {u["full_name"] for u in b_list} == {"Alice Admin", "Bob Member"}  # untouched
+
+
+def test_update_user_fields(auth_client: TestClient) -> None:
+    admin = _admin(auth_client)
+    bob = _create_user(auth_client, admin["access_token"]).json()
+    resp = auth_client.patch(
+        f"/users/{bob['id']}",
+        json={"full_name": "Robert", "role": "admin"},
+        headers=_auth(admin["access_token"]),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["full_name"] == "Robert" and resp.json()["role"] == "admin"
+    bad = auth_client.patch(
+        f"/users/{bob['id']}", json={"role": "owner"}, headers=_auth(admin["access_token"])
+    )
+    assert bad.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        ("patch", {"role": "member"}),
+        ("patch", {"is_active": False}),
+        ("delete", None),
+    ],
+    ids=["demote-self", "deactivate-self-patch", "deactivate-self-delete"],
+)
+def test_last_admin_is_protected(auth_client: TestClient, change: tuple[str, dict | None]) -> None:
+    admin = _admin(auth_client)
+    _create_user(auth_client, admin["access_token"])  # a member does not count as an admin
+    method, body = change
+    url, h = f"/users/{admin['user_id']}", _auth(admin["access_token"])
+    resp = (
+        auth_client.patch(url, json=body, headers=h)
+        if method == "patch"
+        else auth_client.delete(url, headers=h)
+    )
+    assert resp.status_code == 409
+    assert resp.json() == {"detail": "a tenant needs at least one active admin"}
+
+
+def test_second_admin_can_be_demoted_but_not_the_last(auth_client: TestClient) -> None:
+    admin = _admin(auth_client)
+    h = _auth(admin["access_token"])
+    second = _create_user(auth_client, admin["access_token"], email="carol@acme.io", role="admin").json()
+
+    assert auth_client.patch(f"/users/{second['id']}", json={"role": "member"}, headers=h).status_code == 200
+    assert (
+        auth_client.patch(f"/users/{admin['user_id']}", json={"role": "member"}, headers=h).status_code == 409
+    )
+
+
+def test_admin_cannot_deactivate_self_even_with_other_admins(auth_client: TestClient) -> None:
+    admin = _admin(auth_client)
+    _create_user(auth_client, admin["access_token"], email="carol@acme.io", role="admin")
+    resp = auth_client.delete(f"/users/{admin['user_id']}", headers=_auth(admin["access_token"]))
+    assert resp.status_code == 400
+
+
+def test_deactivated_user_cannot_login_or_refresh(auth_client: TestClient) -> None:
+    admin = _admin(auth_client)
+    bob = _create_user(auth_client, admin["access_token"]).json()
+    bob_tokens = _login(auth_client, email="bob@acme.io", password=MEMBER_PASSWORD).json()
+
+    resp = auth_client.delete(f"/users/{bob['id']}", headers=_auth(admin["access_token"]))
+    assert resp.status_code == 204
+
+    assert _login(auth_client, email="bob@acme.io", password=MEMBER_PASSWORD).status_code == 403
+    assert _refresh(auth_client, bob_tokens["refresh_token"]).status_code == 401
+    listed = {u["email"]: u for u in auth_client.get("/users", headers=_auth(admin["access_token"])).json()}
+    assert listed["bob@acme.io"]["is_active"] is False
+
+
+def test_reactivated_user_can_login_again(auth_client: TestClient) -> None:
+    admin = _admin(auth_client)
+    h = _auth(admin["access_token"])
+    bob = _create_user(auth_client, admin["access_token"]).json()
+    auth_client.patch(f"/users/{bob['id']}", json={"is_active": False}, headers=h)
+    assert _login(auth_client, email="bob@acme.io", password=MEMBER_PASSWORD).status_code == 403
+    auth_client.patch(f"/users/{bob['id']}", json={"is_active": True}, headers=h)
+    assert _login(auth_client, email="bob@acme.io", password=MEMBER_PASSWORD).status_code == 200

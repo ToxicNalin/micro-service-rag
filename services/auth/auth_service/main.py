@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from auth_service import keys
 from auth_service.config import get_settings
 from auth_service.db import ping_db
-from auth_service.routers import auth, jwks
+from auth_service.routers import auth, jwks, users
 from auth_service.service import ServiceError
 from common.logging import RequestIdMiddleware, configure_logging, get_request_id
 from common.security import AuthError, JWTVerifier, set_verifier
@@ -75,6 +75,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(Exception, _unhandled_error)
     app.include_router(jwks.router)
     app.include_router(auth.router)
+    app.include_router(users.router)
 
     @app.get("/health")
     async def health() -> JSONResponse:

@@ -19,7 +19,7 @@ from auth_service.passwords import (
     verify_dummy,
     verify_password,
 )
-from auth_service.schemas import RegisterRequest
+from auth_service.schemas import CreateUserRequest, RegisterRequest, UpdateUserRequest
 from auth_service.tokens import revoke_all_user_tokens
 from common.security import Principal
 
@@ -104,8 +104,10 @@ async def authenticate(session: AsyncSession, email: str, password: str) -> User
     """Check credentials with lockout after repeated failures; return the user on success."""
     s = get_settings()
     user = (
-        await session.execute(select(User).where(User.email == normalize_email(email)))
-    ).unique().scalar_one_or_none()
+        (await session.execute(select(User).where(User.email == normalize_email(email))))
+        .unique()
+        .scalar_one_or_none()
+    )
     if user is None:
         await anyio.to_thread.run_sync(verify_dummy, password)
         raise ServiceError(401, "invalid email or password")
@@ -164,3 +166,133 @@ async def get_me(session: AsyncSession, principal: Principal) -> tuple[User, Ten
     if user is None:
         raise ServiceError(404, "user not found")
     return user, user.tenant
+
+
+# ---------- user management (admins, own tenant only) ----------
+
+LAST_ADMIN_MESSAGE = "a tenant needs at least one active admin"
+
+
+async def get_user_in_tenant(session: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID) -> User:
+    """Return the user only if it belongs to this tenant; otherwise 404, never 403 (I4)."""
+    stmt = select(User).where(
+        User.id == _uuid_or_404(user_id, "user"), User.tenant_id == _uuid_or_404(tenant_id, "user")
+    )
+    user = (await session.execute(stmt)).unique().scalar_one_or_none()
+    if user is None:
+        raise ServiceError(404, "user not found")
+    return user
+
+
+async def list_users(session: AsyncSession, tenant_id: uuid.UUID) -> list[User]:
+    """All users of one tenant, oldest first."""
+    stmt = (
+        select(User)
+        .where(User.tenant_id == _uuid_or_404(tenant_id, "tenant"))
+        .order_by(User.created_at, User.email)
+    )
+    return list((await session.execute(stmt)).unique().scalars().all())
+
+
+async def create_user(session: AsyncSession, tenant_id: uuid.UUID, req: CreateUserRequest) -> User:
+    """Create a user in the tenant; 409 on a duplicate email, 400 for a weak password."""
+    email = normalize_email(req.email)
+    _check_strength(req.password, email)
+    if await _email_taken(session, email):
+        raise ServiceError(409, "email already registered")
+    user = User(
+        id=uuid.uuid4(),
+        tenant_id=_uuid_or_404(tenant_id, "tenant"),
+        email=email,
+        full_name=req.full_name.strip(),
+        password_hash=await anyio.to_thread.run_sync(hash_password, req.password),
+        role=req.role,
+    )
+    session.add(user)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise ServiceError(409, "email already registered") from None
+    log.info("user created", extra={"tenant_id": str(user.tenant_id), "user_id": str(user.id)})
+    return await get_user_in_tenant(session, user.tenant_id, user.id)
+
+
+async def count_active_admins(session: AsyncSession, tenant_id: uuid.UUID) -> int:
+    """Count the tenant's active admins, locking those rows so concurrent demotions serialize."""
+    stmt = (
+        select(User.id)
+        .where(
+            User.tenant_id == _uuid_or_404(tenant_id, "tenant"),
+            User.role == UserRole.admin,
+            User.is_active.is_(True),
+        )
+        .with_for_update()
+    )
+    return len((await session.execute(stmt)).scalars().all())
+
+
+async def _guard_last_admin(
+    session: AsyncSession, user: User, *, new_role: UserRole, new_active: bool
+) -> None:
+    """409 if this change would leave the tenant without an active admin."""
+    was_active_admin = user.role == UserRole.admin and user.is_active
+    stays_active_admin = new_role == UserRole.admin and new_active
+    if (
+        was_active_admin
+        and not stays_active_admin
+        and await count_active_admins(session, user.tenant_id) <= 1
+    ):
+        raise ServiceError(409, LAST_ADMIN_MESSAGE)
+
+
+async def update_user(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    req: UpdateUserRequest,
+    acting: Principal,
+) -> User:
+    """Apply a partial update; protects the last admin; deactivation revokes the user's tokens."""
+    user = await get_user_in_tenant(session, tenant_id, user_id)
+    new_role = req.role if req.role is not None else user.role
+    new_active = req.is_active if req.is_active is not None else user.is_active
+    await _guard_last_admin(session, user, new_role=new_role, new_active=new_active)
+    if not new_active and str(user.id) == acting.user_id:
+        raise ServiceError(400, "you cannot deactivate your own account")
+
+    deactivating = user.is_active and not new_active
+    if req.full_name is not None:
+        user.full_name = req.full_name.strip()
+    user.role = new_role
+    user.is_active = new_active
+    if deactivating:
+        await revoke_all_user_tokens(session, user.id)
+    await session.commit()
+    log.info(
+        "user updated",
+        extra={"tenant_id": str(user.tenant_id), "user_id": str(user.id), "by": acting.user_id},
+    )
+    return await get_user_in_tenant(session, user.tenant_id, user.id)
+
+
+async def deactivate_user(
+    session: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID, acting: Principal
+) -> None:
+    """Deactivate a user (never yourself, never the last admin) and revoke their refresh tokens."""
+    user = await get_user_in_tenant(session, tenant_id, user_id)
+    await _guard_last_admin(session, user, new_role=user.role, new_active=False)
+    if str(user.id) == acting.user_id:
+        raise ServiceError(400, "you cannot deactivate your own account")
+    user.is_active = False
+    revoked = await revoke_all_user_tokens(session, user.id)
+    await session.commit()
+    log.info(
+        "user deactivated",
+        extra={
+            "tenant_id": str(user.tenant_id),
+            "user_id": str(user.id),
+            "by": acting.user_id,
+            "revoked_tokens": revoked,
+        },
+    )
