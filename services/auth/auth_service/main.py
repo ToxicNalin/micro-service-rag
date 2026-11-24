@@ -13,7 +13,7 @@ from auth_service.config import get_settings
 from auth_service.db import ping_db
 from auth_service.routers import auth, jwks, users
 from auth_service.service import ServiceError
-from common.logging import RequestIdMiddleware, configure_logging, get_request_id
+from common.logging import RequestIdMiddleware, configure_logging, unhandled_exception_handler
 from common.security import AuthError, JWTVerifier, set_verifier
 from common.settings import check_production_secrets
 
@@ -50,20 +50,6 @@ async def _auth_error(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
-async def _unhandled_error(request: Request, exc: Exception) -> JSONResponse:
-    request_id = getattr(request.state, "request_id", None) or get_request_id()
-    log.error(
-        "unhandled error",
-        exc_info=(type(exc), exc, exc.__traceback__),
-        extra={"path": request.url.path, "request_id": request_id},
-    )
-    return JSONResponse(
-        {"detail": "internal error", "request_id": request_id},
-        status_code=500,
-        headers={"X-Request-ID": request_id},
-    )
-
-
 def create_app() -> FastAPI:
     """Build the auth FastAPI app."""
     # read straight from the environment: settings validation must not run at import time
@@ -72,7 +58,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestIdMiddleware)
     app.add_exception_handler(ServiceError, _service_error)
     app.add_exception_handler(AuthError, _auth_error)
-    app.add_exception_handler(Exception, _unhandled_error)
+    app.add_exception_handler(Exception, unhandled_exception_handler)
     app.include_router(jwks.router)
     app.include_router(auth.router)
     app.include_router(users.router)

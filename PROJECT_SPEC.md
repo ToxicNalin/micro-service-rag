@@ -2225,7 +2225,7 @@ Claude ticks a box when a step's tests pass; you confirm it with the "Done when"
 - [x] 2.2 Passwords, signing keys, JWKS and token creation
 - [x] 2.3 Register, login, refresh, logout, me, change password
 - [x] 2.4 User management and the last-admin rule
-- [ ] 3.1 Ingestion skeleton, models and migrations
+- [x] 3.1 Ingestion skeleton, models and migrations
 - [ ] 3.2 Parsers and chunker
 - [ ] 3.3 Indexer, pipeline and job recovery
 - [ ] 3.4 Documents API
@@ -2293,4 +2293,8 @@ Design decisions made in this spec. Claude appends new rows when a step forces a
 | 2026-11-24 | 2.3 | Added public `tokens.token_response(user, raw_refresh)`; `models.as_utc()` normalises datetimes | `/auth/refresh` already has the new raw token (no second issue); SQLite returns naive datetimes. |
 | 2026-11-24 | 2.4 | The last-admin check runs before the self-deactivation check; `PATCH {"is_active": false}` on yourself is also 400 | The only admin can only target themselves, so they get the specified 409; with other admins, both routes refuse self-deactivation consistently. |
 | 2026-11-24 | 2.4 | `count_active_admins` locks the tenant's active-admin rows (`SELECT … FOR UPDATE`) | Two admins demoting each other at once can't both succeed; verified live on Postgres (10/10 races: one 200, one 409). |
+| 2026-11-24 | 3.1 | Added `common.logging.unhandled_exception_handler`; auth and ingestion register it for `Exception` | One implementation of the §6 generic-500 rule (`{"detail": "internal error", "request_id"}`) for all services. |
+| 2026-11-24 | 3.1 | Ingestion `GET /health` returns `{"status": "ok", "db": "ok"\|"down", "qdrant": "ok"\|"down"}`, 503 if either is down | §6.3 names both checks but no body; this mirrors the auth shape. |
+| 2026-11-24 | 3.1 | `configure_logging` sets the `httpx`/`httpcore` loggers to WARNING | qdrant-client logs every HTTP call (incl. the 10 s health check) at INFO, which drowned the service logs. |
+| 2026-11-24 | 3.1 | Step 3.1 tests live in `tests/integration/test_ingestion_api.py` (startup, health, migration-vs-models); Step 3.4 extends that file | The step lists no tests; these catch schema drift and startup failures early. |
 | 2026-11-24 | 2.4 | Known property, not changed: a demoted or deactivated user's existing **access** token keeps its old role until it expires (≤ 15 min); refresh tokens are revoked at once | Access tokens are stateless JWTs verified by every service without calling auth; the short TTL bounds the window. |

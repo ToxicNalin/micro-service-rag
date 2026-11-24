@@ -52,6 +52,28 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
     restart: unless-stopped
 
+  ingestion:
+    build: { context: ., dockerfile: services/ingestion/Dockerfile }
+    env_file: .env
+    environment:
+      SERVICE_NAME: ingestion
+      DATABASE_URL: postgresql+asyncpg://ingestion_user:${INGESTION_DB_PASSWORD}@postgres:5432/ingestion_db
+      QDRANT_URL: http://qdrant:6333
+      AUTH_JWKS_URL: http://auth:8003/.well-known/jwks.json
+      RETRIEVAL_URL: http://retrieval:8002
+      MODEL_CACHE: /models
+    volumes: [models:/models]
+    ports: ["127.0.0.1:8001:8001"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      qdrant: { condition: service_started }
+      auth: { condition: service_healthy }
+    healthcheck:
+      <<: *health
+      start_period: 180s              # first boot downloads the models
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:

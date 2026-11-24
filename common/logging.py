@@ -78,6 +78,23 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(entry, default=str, ensure_ascii=False)
 
 
+async def unhandled_exception_handler(request: Any, exc: Exception) -> Any:
+    """FastAPI handler for unexpected errors: log the traceback, return a generic 500 with the request ID."""
+    from fastapi.responses import JSONResponse  # local import: common.logging must not require FastAPI
+
+    request_id = getattr(request.state, "request_id", None) or get_request_id()
+    logging.getLogger("common.errors").error(
+        "unhandled error",
+        exc_info=(type(exc), exc, exc.__traceback__),
+        extra={"path": request.url.path, "request_id": request_id},
+    )
+    return JSONResponse(
+        {"detail": "internal error", "request_id": request_id},
+        status_code=500,
+        headers={"X-Request-ID": request_id},
+    )
+
+
 def configure_logging(service_name: str, level: str) -> None:
     """Install JsonFormatter on the root and uvicorn loggers and silence uvicorn.access."""
     handler = logging.StreamHandler(sys.stdout)
@@ -100,6 +117,10 @@ def configure_logging(service_name: str, level: str) -> None:
     access.handlers = []
     access.propagate = False
     access.disabled = True
+
+    # HTTP client libraries log every request (e.g. each Qdrant call) at INFO; keep only problems
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 class RequestIdMiddleware:
