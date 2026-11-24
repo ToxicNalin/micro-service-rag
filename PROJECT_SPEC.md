@@ -596,7 +596,7 @@ PER_TENANT_IDF=true
 # ================= Evaluation (RAGAS, runs on your PC) =================
 EVAL_BASE_URL=http://localhost:8000
 EVAL_TENANT_NAME=DocMind Evaluation
-EVAL_EMAIL=eval@docmind.local
+EVAL_EMAIL=eval@docmind.example
 EVAL_PASSWORD=change-me-eval-password-1
 # anthropic | openai
 EVAL_LLM_PROVIDER=anthropic
@@ -2222,8 +2222,8 @@ Claude ticks a box when a step's tests pass; you confirm it with the "Done when"
 - [x] 1.2 Security (JWT verification, roles, internal token)
 - [x] 1.3 Embeddings and vector store
 - [x] 2.1 Auth skeleton, database models and migrations
-- [ ] 2.2 Passwords, signing keys, JWKS and token creation
-- [ ] 2.3 Register, login, refresh, logout, me, change password
+- [x] 2.2 Passwords, signing keys, JWKS and token creation
+- [x] 2.3 Register, login, refresh, logout, me, change password
 - [ ] 2.4 User management and the last-admin rule
 - [ ] 3.1 Ingestion skeleton, models and migrations
 - [ ] 3.2 Parsers and chunker
@@ -2285,3 +2285,9 @@ Design decisions made in this spec. Claude appends new rows when a step forces a
 | 2026-11-24 | 2.1 | `create_app()` configures logging from `SERVICE_NAME`/`LOG_LEVEL` via `os.getenv`, not the validated settings | `app = create_app()` runs at import; required settings (e.g. `DATABASE_URL`) must not be validated then. |
 | 2026-11-24 | 2.1 | `alembic.ini`: `prepend_sys_path = . ../..` with `path_separator = space`; `env.py` also accepts `config.attributes["database_url"]` | Migrations run both in the image (`/srv`) and locally from `services/auth`; tests run them on SQLite. |
 | 2026-11-24 | 2.1 | `UserRole(enum.StrEnum)` instead of `(str, Enum)`; `RefreshToken.user` relationship (`lazy="joined"`) added | Same behaviour (ruff UP042); `rotate_refresh_token` (2.3) reads `row.user`. |
+| 2026-11-24 | 2.2 | `EVAL_EMAIL` changed from `eval@docmind.local` to `eval@docmind.example` (§5.1, `.env.example`) | `email-validator` (behind Pydantic's `EmailStr`) rejects special-use domains such as `.local` and `.test`; the evaluation login would always fail with 422. |
+| 2026-11-24 | 2.2 | Password rules: the "contains your email" check applies only when the email's local part is ≥ 3 characters; passwords are capped at 256 characters | A 1–2 letter local part (`al@…`) would otherwise forbid most passwords; the cap bounds Argon2 work per request. |
+| 2026-11-24 | 2.2 | The key file is created with `O_CREAT \| O_EXCL` (mode 600) and then loaded | Two processes starting at once can't overwrite each other's key. |
+| 2026-11-24 | 2.3 | Argon2 hashing/verification runs in `anyio.to_thread.run_sync` | ~50–100 ms of CPU per call would otherwise block the event loop (§6 "blocking work"). |
+| 2026-11-24 | 2.3 | `User.tenant` and `RefreshToken.user` use `innerjoin=True`; rotation locks with `with_for_update(of=RefreshToken)` | Postgres rejects `FOR UPDATE` on the nullable side of an outer join; the joins can't be null anyway. Verified live on Postgres. |
+| 2026-11-24 | 2.3 | Added public `tokens.token_response(user, raw_refresh)`; `models.as_utc()` normalises datetimes | `/auth/refresh` already has the new raw token (no second issue); SQLite returns naive datetimes. |

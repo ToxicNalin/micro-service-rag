@@ -23,6 +23,11 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+def as_utc(value: datetime) -> datetime:
+    """Treat a naive datetime as UTC (SQLite drops tzinfo); convert aware ones to UTC."""
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
 class Tenant(Base):
     """An organization; owns users."""
 
@@ -65,7 +70,7 @@ class User(Base):
         DateTime(timezone=True), nullable=False, default=utcnow, server_default=func.now()
     )
 
-    tenant: Mapped[Tenant] = relationship(back_populates="users", lazy="joined")
+    tenant: Mapped[Tenant] = relationship(back_populates="users", lazy="joined", innerjoin=True)
 
     def __repr__(self) -> str:
         """Short repr that never includes the password hash."""
@@ -92,11 +97,11 @@ class RefreshToken(Base):
         DateTime(timezone=True), nullable=False, default=utcnow, server_default=func.now()
     )
 
-    user: Mapped[User] = relationship(lazy="joined")
+    user: Mapped[User] = relationship(lazy="joined", innerjoin=True)
 
     def __repr__(self) -> str:
         """Short repr that never includes the token hash."""
         return f"RefreshToken(id={self.id}, user_id={self.user_id}, family_id={self.family_id})"
 
 
-__all__ = ["Base", "RefreshToken", "Tenant", "User", "UserRole", "utcnow"]
+__all__ = ["Base", "RefreshToken", "Tenant", "User", "UserRole", "as_utc", "utcnow"]
